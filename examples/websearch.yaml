@@ -1,0 +1,98 @@
+# =============================================================================
+# opencode-websearch-loadbalanced — 配置模板（TEMPLATE，非生效配置）
+# =============================================================================
+# ⚠️ 依据 docs/architecture.md §7：OpenCode v2 插件配置的官方唯一通道是
+#    opencode.jsonc 的 `plugins[]` 条目 `{ package, options }`，options 在
+#    setup(ctx) 内经 `ctx.options` 读取。本文件是**同结构的可读模板**，
+#    供人工编辑后平移为 JSONC 的 `plugins[0].options`；字段语义一一对应。
+#
+# ⚠️ keys 一律写 ${ENV_VAR} 占位（解析时读 process.env），明文 key 禁止进
+#    配置文件、进 git。日志/输出只出现 keyId（sha256 前 8 位），绝不出现明文。
+#
+# ⚠️ budget.limits 中的额度**仅为默认模板值**，上线前必须按各 provider
+#    实际账单/免费额度改写；searxng 无 key、无上游额度 → 不配 limit 即不受闸。
+# =============================================================================
+
+providers:
+  parallel:
+    enabled: true
+    priority: 10                 # 数字越小越优先
+    keys:
+      - ${PARALLEL_API_KEY}
+      - ${PARALLEL_API_KEY_2}
+    options:
+      mode: fast                 # provider 私有透传参数
+
+  exa:
+    enabled: true
+    priority: 20
+    keys:
+      - ${EXA_API_KEY}
+
+  tavily:
+    enabled: true
+    priority: 30
+    keys:
+      - ${TAVILY_API_KEY}
+    options:
+      search_depth: basic
+
+  you:
+    enabled: true
+    priority: 40
+    keys:
+      - ${YDC_API_KEY}
+
+  serpapi:
+    enabled: true
+    priority: 50
+    keys:
+      - ${SERPAPI_API_KEY}
+
+  searxng:                       # 无 key，最终 fallback（403-HTML → UNKNOWN）
+    enabled: true
+    priority: 99
+    baseUrl: https://search.658658.xyz
+
+routing:
+  strategy: priority             # priority | round-robin（默认 priority）
+  maxProviderAttempts: 6         # 单次查询最多跨多少个 provider 尝试
+
+http:
+  timeoutMs: 8000                # AbortController 单请求超时
+
+retry:
+  retriesPerKey: 2               # 同 key 重试次数（仅 SERVER_ERROR）
+  retryBackoffMs: 400            # 指数退避基数：base·2ⁿ
+  maxRetryBackoffMs: 8000        # 退避封顶
+
+circuitBreaker:                  # 每 provider 独立；只计 SERVER/NETWORK/TIMEOUT
+  failureThreshold: 3
+  openMs: 30000
+  halfOpenMaxCalls: 1
+  successThreshold: 2
+
+keyPool:                         # 每 key 独立状态机（active/cooldown/disabled）
+  errorThreshold: 3
+  baseCooldownMs: 5000           # 429 无 Retry-After 时的退避基数
+  maxCooldownMs: 300000
+
+budget:                          # 双 scope：provider:{id} 与 key:{keyId}
+  enabled: true
+  unit: requests
+  countMode: attempt             # attempt = 每次网络请求计数
+  limits:
+    - scope: provider
+      target: serpapi
+      limit: 250                 # ← 默认模板值，按实际额度改
+    - scope: key
+      target: exa:9f3a7c21       # target 用 keyId 指纹，非明文
+      limit: 10000               # ← 默认模板值，按实际额度改
+    # searxng 不配 limit → 不受预算闸（仍可加 provider scope 防实例滥用）
+
+cache:
+  ttlMs: 300000                  # 5 分钟
+  maxEntries: 256
+
+logging:
+  level: info                    # debug 也不打印 secret（脱敏在序列化层）

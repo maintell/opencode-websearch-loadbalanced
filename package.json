@@ -1,0 +1,29 @@
+{
+  "name": "opencode-websearch-loadbalanced",
+  "version": "0.1.0",
+  "description": "OpenCode v2 plugin: load-balanced websearch provider (multi-provider routing, key pool, budget, circuit breaker)",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "test:providers": "vitest run tests/integration",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "build": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@opencode/plugin": "^2.0.18"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.1",
+    "vitest": "^5.0.2"
+  }
+}
