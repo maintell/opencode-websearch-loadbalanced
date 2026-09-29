@@ -33,6 +33,10 @@ src/utils/*      redact 日志脱敏、错误分类表、URL 规范化去重
 `examples/websearch.yaml` 是同结构的可读模板（**模板，非生效配置**）。
 key 一律走 `${ENV_VAR}` 环境变量名，明文不进配置、不进 git。
 
+配置也可**外置**：`options.configFile` 指定 JSONC 文件（支持 `~`），未指定则探测默认路径
+`~/.config/opencode/websearch-loadbalanced.jsonc`（不存在 → 静默走 inline，解析失败 → warning 回退）。
+合并规则：文件为 base，inline `options` **顶层键整体覆盖**（不做深合并），见 `docs/configuration.md`「外置配置文件」。
+
 ```jsonc
 // opencode.jsonc
 {

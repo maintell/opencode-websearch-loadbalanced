@@ -6,6 +6,9 @@
  * - 零硬编码额度：budget.limits 只来自配置
  * - 所有 errors/warnings 过 redact()，绝不携带 key 明文
  */
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
 import {
   PROVIDER_IDS,
   type BudgetLimit,
@@ -399,6 +402,125 @@ export function resolveConfig(
     },
     errors,
     warnings,
+  }
+}
+
+/* ============================================================
+ * 外置配置文件（JSONC）→ 与 inline ctx.options 合并
+ * 见 docs/configuration.md「外置配置文件」。IO 由调用方（createRuntime）触发。
+ * ============================================================ */
+
+/** 默认路径（相对 homedir）：`~/.config/opencode/websearch-loadbalanced.jsonc` */
+export const DEFAULT_CONFIG_FILE = path.join(".config", "opencode", "websearch-loadbalanced.jsonc")
+
+/** `~` / `~/x` / `~\x` → homedir；其余原样返回 */
+export function expandHome(p: string, homeDir: string = os.homedir()): string {
+  if (p === "~") return homeDir
+  if (p.startsWith("~/") || p.startsWith("~\\")) return path.join(homeDir, p.slice(2))
+  return p
+}
+
+/**
+ * JSONC 注释剥离（状态机，非 naive regex）：
+ * 逐字符跟踪「是否在字符串字面量内 / 是否处于转义」，因此
+ * `"baseUrl": "https://host//a"` 里的 `//` 不会被当注释截断。
+ * 只处理 `//` 行注释与 `/* … *\/` 块注释；尾逗号等其他 JSONC 方言不处理
+ * （→ JSON.parse 失败 → 调用方回退 inline + warning）。
+ */
+export function stripJsonComments(src: string): string {
+  let out = ""
+  let i = 0
+  let inString = false
+  let escaped = false
+  while (i < src.length) {
+    const c = src[i]
+    if (inString) {
+      out += c
+      if (escaped) escaped = false
+      else if (c === "\\") escaped = true
+      else if (c === '"') inString = false
+      i++
+      continue
+    }
+    if (c === '"') {
+      inString = true
+      out += c
+      i++
+      continue
+    }
+    if (c === "/" && src[i + 1] === "/") {
+      // 行注释：丢到行尾，保留换行符（不合并行）
+      while (i < src.length && src[i] !== "\n") i++
+      continue
+    }
+    if (c === "/" && src[i + 1] === "*") {
+      i += 2
+      while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) i++
+      i = i < src.length ? i + 2 : src.length // 未闭合块注释 → 吞到结尾
+      continue
+    }
+    out += c
+    i++
+  }
+  return out
+}
+
+export interface LoadExternalConfigOptions {
+  /** 测试注入；默认 `os.homedir()` */
+  homeDir?: string
+  /** 测试注入；默认 `fs.readFileSync(p, "utf8")`（同步读，属 setup 一次性 IO） */
+  readFile?: (p: string) => string
+}
+
+export interface ExternalConfig {
+  /** 合并后输入：文件为 base，inline 顶层键整体覆盖；`configFile` 已剥离（仅输入侧） */
+  options: WebSearchPluginOptions
+  warnings: string[]
+  /** 实际读取的配置文件路径；未读到文件则 undefined */
+  source?: string
+}
+
+/**
+ * 读外置 JSONC 配置并与 inline `ctx.options` 合并。不抛错。
+ * - 路径：inline `configFile`（`~` 展开为 homedir）；未给 → 探测默认路径，
+ *   默认路径不存在时**静默**走 inline，显式路径读失败 → warning。
+ * - 文件 JSONC 解析失败 → warning + 回退 inline。
+ * - 合并语义：**顶层键整体覆盖**（不做深合并）。
+ */
+export function loadExternalConfig(
+  inline: WebSearchPluginOptions = {},
+  opts: LoadExternalConfigOptions = {},
+): ExternalConfig {
+  const homeDir = opts.homeDir ?? os.homedir()
+  const readFile = opts.readFile ?? ((p: string) => fs.readFileSync(p, "utf8"))
+  const warnings: string[] = []
+  const warn = (m: string) => warnings.push(redact(m))
+
+  const { configFile, ...inlineRest } = inline
+  const explicit = typeof configFile === "string" && configFile.length > 0
+  const target = explicit ? expandHome(configFile as string, homeDir) : path.join(homeDir, DEFAULT_CONFIG_FILE)
+
+  let text: string | undefined
+  try {
+    text = readFile(target)
+  } catch (e) {
+    // 默认路径缺失 → 静默走 inline；显式路径失败 → warning
+    if (explicit) {
+      warn(`外置配置文件读取失败（${target}），回退 inline 配置：${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
+  if (text === undefined) return { options: inlineRest, warnings }
+
+  try {
+    const parsed: unknown = JSON.parse(stripJsonComments(text))
+    if (!isRecord(parsed)) throw new Error("顶层必须是对象")
+    const merged = { ...parsed, ...inlineRest } as WebSearchPluginOptions
+    delete merged.configFile // 仅输入侧，不进合并结果
+    return { options: merged, warnings, source: target }
+  } catch (e) {
+    warn(`外置配置文件解析失败（${target}），回退 inline 配置：${e instanceof Error ? e.message : String(e)}`)
+    return { options: inlineRest, warnings }
   }
 }
 

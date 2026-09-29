@@ -8,13 +8,14 @@
  * - IO / 实例构造全部在 setup() 内完成；ctx.websearch.transform 回调会被重放（replay），
  *   必须同步、廉价、无一次性副作用——回调内只有 editor.add / editor.default.set。
  * - 错误输出一律经 utils/logging.redact() 脱敏，绝不含 key 明文。
- * - ctx 无顶层 directory（路径在 ctx.location.directory）；本文件不读路径。
+ * - ctx 无顶层 directory（路径在 ctx.location.directory）；本文件不读 ctx 路径。
+ *   外置配置文件路径只来自 options（`configFile` / 默认 `~/.config/opencode/…jsonc`），在 setup 内同步读一次。
  */
 import { Plugin } from "@opencode/plugin"
 import { createMonthlyBudgetManager } from "./budget"
 import { createCache } from "./cache"
 import { createCircuitBreaker } from "./circuit-breaker"
-import { resolveConfig, resolveProviderKeys } from "./config"
+import { loadExternalConfig, resolveConfig, resolveProviderKeys } from "./config"
 import { createHttpClient } from "./http-client"
 import { createKeyPool } from "./key-pool"
 import { createExaAdapter } from "./providers/exa"
@@ -69,6 +70,8 @@ export interface RuntimeOptions {
   env?: Record<string, string | undefined>
   /** 测试注入时钟 */
   now?: () => number
+  /** 外置配置文件的 homedir（`~` 与默认路径基准）；默认 `os.homedir()`，测试可注入临时目录 */
+  homeDir?: string
 }
 
 export interface Runtime {
@@ -79,13 +82,15 @@ export interface Runtime {
   warnings: string[]
 }
 
-/** ctx.options → 全套内核实例（无网络 IO；构造即用）。问题进 errors/warnings，不抛错。 */
+/** ctx.options → 全套内核实例（无网络 IO；仅外置配置文件一次同步本地读）。问题进 errors/warnings，不抛错。 */
 export function createRuntime(
   options: WebSearchPluginOptions = {},
   opts: RuntimeOptions = {},
 ): Runtime {
   const env = opts.env ?? process.env
-  const { resolved, errors, warnings } = resolveConfig(options, { env, now: opts.now })
+  // 外置 JSONC 配置文件（inline configFile / 默认路径探测）→ 与 inline 合并；一次本地 IO，放 setup 流程内
+  const ext = loadExternalConfig(options, { homeDir: opts.homeDir })
+  const { resolved, errors, warnings } = resolveConfig(ext.options, { env, now: opts.now })
   const logger = createLogger({ level: resolved.logging.level })
   const keys = resolveProviderKeys(resolved, env)
   const keyPool = createKeyPool({ config: resolved.keyPool, keys, now: opts.now })
@@ -103,7 +108,7 @@ export function createRuntime(
     cache,
     now: opts.now,
   })
-  return { config: resolved, router, logger, errors, warnings }
+  return { config: resolved, router, logger, errors, warnings: [...ext.warnings, ...warnings] }
 }
 
 /* ============================================================

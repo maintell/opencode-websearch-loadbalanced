@@ -1,0 +1,80 @@
+{
+  // =============================================================================
+  // opencode-websearch-loadbalanced — 外置配置文件示例（JSONC，TEMPLATE）
+  // =============================================================================
+  // 用法：放到 ~/.config/opencode/websearch-loadbalanced.jsonc（默认探测路径），
+  //       或在 opencode.jsonc 里显式指定：
+  //       { "package": "opencode-websearch-loadbalanced",
+  //         "options": { "configFile": "~/my-websearch.jsonc" } }
+  // 合并：本文件为 base，opencode.jsonc 里的 inline options **顶层键整体覆盖**（非深合并）。
+  // 密钥：只写环境变量名 `${ENV_VAR}` / 裸 env 名，解析时读 process.env；
+  //       明文 key 禁止进配置文件、进 git；日志/输出只出现 keyId（sha256 前 8 位）。
+  // 额度：budget.limits 数值仅为占位，上线前按各 provider 实际账单/免费额度改写。
+  // =============================================================================
+
+  "providers": {
+    "parallel": {
+      "enabled": true,
+      "priority": 10, // 数字越小越优先
+      "keys": ["${PARALLEL_API_KEY}", "PARALLEL_API_KEY_2"], // 三种写法等价：裸 env 名 / "${ENV}" / {id, value}
+      "options": { "mode": "fast" } // adapter 私有参数，透明透传
+    },
+    "exa": {
+      "enabled": true,
+      "priority": 20,
+      "keys": [{ "id": "primary", "value": "${EXA_API_KEY}" }] // 对象写法：显式槽位 id
+      // "baseUrl": "https://api.exa.ai",   // 支持 ${VAR} 展开；非法 URL → 该 provider 不可用
+    },
+    "tavily": {
+      "enabled": true,
+      "priority": 30,
+      "keys": ["${TAVILY_API_KEY}"],
+      "options": { "search_depth": "basic" }
+    },
+    "you": { "enabled": true, "priority": 40, "keys": ["${YDC_API_KEY}"] },
+    "serpapi": { "enabled": true, "priority": 50, "keys": ["${SERPAPI_API_KEY}"] },
+    // 无 key 的最终 fallback；env 缺失不影响它
+    "searxng": { "enabled": true, "priority": 99, "baseUrl": "https://search.658658.xyz" }
+    // "keysInline": ["sk-plaintext-not-recommended"],   // 明文兜底（不推荐）：日志中仅显示 keyId
+  },
+
+  "routing": {
+    "strategy": "priority", // priority | round_robin
+    "maxProviderAttempts": 6 // 单次查询最多跨多少个 provider 尝试
+  },
+
+  "http": {
+    "timeoutMs": 8000, // 单请求超时
+    "retriesPerKey": 2, // 同 key 重试次数（仅 5xx/网络/超时）
+    "retryBackoffMs": 400, // 指数退避基数 base·2ⁿ
+    "maxRetryBackoffMs": 8000 // 退避封顶
+  },
+
+  "circuitBreaker": {
+    "failureThreshold": 3,
+    "openMs": 30000,
+    "halfOpenMaxCalls": 1,
+    "successThreshold": 2
+  },
+
+  "keyPool": {
+    "errorThreshold": 3,
+    "baseCooldownMs": 5000, // 429 无 Retry-After 时的退避基数
+    "maxCooldownMs": 300000
+  },
+
+  "budget": {
+    "enabled": true,
+    "unit": "requests", // requests | credits | credit | usd | unlimited
+    "countMode": "attempt", // attempt = 每次网络请求计数
+    "limits": [
+      { "scope": "provider", "target": "serpapi", "limit": 250 }, // ← 占位值，按实际额度改
+      { "scope": "key", "target": "exa:9f3a7c21", "limit": 10000 } // key scope 用 keyId 指纹，非明文
+      // searxng 不配 limit → 不受预算闸
+    ]
+  },
+
+  "cache": { "ttlMs": 300000, "maxEntries": 256 }, // 5 分钟 / 256 条 LRU
+
+  "logging": { "level": "info" } // silent | error | info | debug；debug 也不打印 secret
+}

@@ -3,6 +3,45 @@
 > **配置以 `src/config.ts` + `src/types.ts` 为最终事实**；架构背景见 `docs/architecture.md` §7。
 > **不存在生效的 `websearch.yaml`**：V2 唯一官方配置通道是 `opencode.jsonc` 的 `plugins[]` 对象条目 `{ package, options }` → `setup(ctx)` 内读 `ctx.options`（https://opencode.ai/v2/docs/plugins ）。env 只用于**密钥材料**，结构性配置一律走 `options`。
 
+## 外置配置文件（可选）
+
+`opencode.jsonc` 的插件项可保持纯字符串（无 `options`），全部配置放独立 JSONC 文件：
+
+```jsonc
+// opencode.jsonc
+{ "plugins": ["opencode-websearch-loadbalanced"] }   // 或 { "package": "…" }，不写 options
+```
+
+- **路径**：`ctx.options.configFile`（`~` 展开为 homedir）；未给则探测默认路径
+  `~/.config/opencode/websearch-loadbalanced.jsonc`。默认路径**不存在 → 静默走 inline**（无告警）；
+  显式 `configFile` 读失败 → warning + 回退 inline。
+- **格式**：JSONC —— 支持 `//` 行注释与 `/* … */` 块注释（内置状态机剥离，字符串字面量内的 `//`
+  不会被截断，如 `"baseUrl": "https://host//path"`）。**不支持尾逗号**；解析失败 → warning + 回退
+  inline，不抛错、插件照常启动。
+- **合并规则**：文件为 base，inline `ctx.options` **顶层键整体覆盖**（**不做深合并**）——
+  inline 只要出现 `providers` / `routing` / `http` / `cache` / `circuitBreaker` / `keyPool` /
+  `budget` / `logging` 中的某键，该块就**整个**替换文件里的同名块，未出现的键才保留文件值。
+- `configFile` 只在输入侧生效，不进 `ResolvedConfig`；文件内容随后按 §2–§4 同一套 schema 校验。
+- 完整可改示例见 `examples/websearch.config.jsonc`。
+
+```jsonc
+// ~/.config/opencode/websearch-loadbalanced.jsonc（外置配置文件）
+{
+  // 密钥只写环境变量名，明文不进配置、不进 git
+  "providers": {
+    "exa":     { "enabled": true, "priority": 20, "keys": ["EXA_API_KEY"] },
+    "searxng": { "enabled": true, "priority": 99 }   // 无 key，最终 fallback
+  },
+  "routing": { "strategy": "priority", "maxProviderAttempts": 6 }, /* 行内注释也允许 */
+  "logging": { "level": "info" }
+}
+```
+
+```jsonc
+// opencode.jsonc：显式指定外置文件（可选；不写则探测默认路径）
+{ "plugins": [{ "package": "opencode-websearch-loadbalanced", "options": { "configFile": "~/my-websearch.jsonc" } }] }
+```
+
 ## 1. 顶层结构
 
 ```jsonc

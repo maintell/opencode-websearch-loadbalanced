@@ -391,6 +391,12 @@ export interface ResolvedKeyRef {
 export type BudgetUnitInput = "requests" | "credits" | "credit" | "usd" | "unlimited"
 
 export interface WebSearchPluginOptions {
+  /**
+   * 外置配置文件路径（仅输入侧，不进 ResolvedConfig）。
+   * `~` 展开为 homedir；未给则探测默认路径 `~/.config/opencode/websearch-loadbalanced.jsonc`。
+   * 见 docs/configuration.md「外置配置文件」。
+   */
+  configFile?: string
   providers?: Partial<Record<ProviderID, ProviderOptions>>
   routing?: Partial<RouterConfig>
   http?: Partial<HttpConfig>
