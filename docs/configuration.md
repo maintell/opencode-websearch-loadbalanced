@@ -16,7 +16,8 @@
   `~/.config/opencode/websearch-loadbalanced.jsonc`。默认路径**不存在 → 静默走 inline**（无告警）；
   显式 `configFile` 读失败 → warning + 回退 inline。
 - **格式**：JSONC —— 支持 `//` 行注释与 `/* … */` 块注释（内置状态机剥离，字符串字面量内的 `//`
-  不会被截断，如 `"baseUrl": "https://host//path"`）。**不支持尾逗号**；解析失败 → warning + 回退
+  不会被截断，如 `"baseUrl": "https://host//path"`），**也支持尾逗号**（数组/对象最后一个元素后的 `,`
+  容忍，字符串字面量内的 `,]`/`,}` 不受影响）；其余解析失败 → warning + 回退
   inline，不抛错、插件照常启动。
 - **合并规则**：文件为 base，inline `ctx.options` **顶层键整体覆盖**（**不做深合并**）——
   inline 只要出现 `providers` / `routing` / `http` / `cache` / `circuitBreaker` / `keyPool` /

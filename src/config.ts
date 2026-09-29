@@ -424,8 +424,7 @@ export function expandHome(p: string, homeDir: string = os.homedir()): string {
  * JSONC 注释剥离（状态机，非 naive regex）：
  * 逐字符跟踪「是否在字符串字面量内 / 是否处于转义」，因此
  * `"baseUrl": "https://host//a"` 里的 `//` 不会被当注释截断。
- * 只处理 `//` 行注释与 `/* … *\/` 块注释；尾逗号等其他 JSONC 方言不处理
- * （→ JSON.parse 失败 → 调用方回退 inline + warning）。
+ * 只处理 `//` 行注释与 `/* … *\/` 块注释；尾逗号由 stripTrailingCommas 单独处理。
  */
 export function stripJsonComments(src: string): string {
   let out = ""
@@ -458,6 +457,46 @@ export function stripJsonComments(src: string): string {
       while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) i++
       i = i < src.length ? i + 2 : src.length // 未闭合块注释 → 吞到结尾
       continue
+    }
+    out += c
+    i++
+  }
+  return out
+}
+
+/**
+ * JSONC 尾逗号容忍（第二道状态机，在 stripJsonComments 之后跑）：
+ * `,` 后仅空白紧跟 `]`/`}` → 删除该 `,`。同样跟踪字符串字面量/转义，
+ * 因此 `"a,]"` 里的 `,]` 不会被误删。其余语法错交给 JSON.parse（→ 回退 inline + warning）。
+ */
+export function stripTrailingCommas(src: string): string {
+  let out = ""
+  let i = 0
+  let inString = false
+  let escaped = false
+  while (i < src.length) {
+    const c = src[i]
+    if (inString) {
+      out += c
+      if (escaped) escaped = false
+      else if (c === "\\") escaped = true
+      else if (c === '"') inString = false
+      i++
+      continue
+    }
+    if (c === '"') {
+      inString = true
+      out += c
+      i++
+      continue
+    }
+    if (c === ",") {
+      let j = i + 1
+      while (j < src.length && (src[j] === " " || src[j] === "\t" || src[j] === "\n" || src[j] === "\r")) j++
+      if (j < src.length && (src[j] === "]" || src[j] === "}")) {
+        i++ // 跳过尾逗号（不出 out）
+        continue
+      }
     }
     out += c
     i++
@@ -513,7 +552,7 @@ export function loadExternalConfig(
   if (text === undefined) return { options: inlineRest, warnings }
 
   try {
-    const parsed: unknown = JSON.parse(stripJsonComments(text))
+    const parsed: unknown = JSON.parse(stripTrailingCommas(stripJsonComments(text)))
     if (!isRecord(parsed)) throw new Error("顶层必须是对象")
     const merged = { ...parsed, ...inlineRest } as WebSearchPluginOptions
     delete merged.configFile // 仅输入侧，不进合并结果

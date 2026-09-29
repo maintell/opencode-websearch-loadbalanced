@@ -4,6 +4,7 @@
  * - inline configFile 加载 / `~` 展开 / 显式路径缺失告警
  * - 合并语义 = 顶层键整体覆盖（非深合并）
  * - JSONC 注释剥离状态机（字符串内的 // 不被截断）
+ * - JSONC 尾逗号容忍（数组/对象尾逗号，字符串内 `,]` 不误删）
  * - 坏 JSON → warning + 回退 inline（不抛错）
  * 全部用真实临时文件，零网络、不 mock provider 调用。
  */
@@ -12,7 +13,14 @@ import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { afterAll, describe, expect, it } from "vitest"
-import { DEFAULT_CONFIG_FILE, expandHome, loadExternalConfig, resolveConfig, stripJsonComments } from "../src/config"
+import {
+  DEFAULT_CONFIG_FILE,
+  expandHome,
+  loadExternalConfig,
+  resolveConfig,
+  stripJsonComments,
+  stripTrailingCommas,
+} from "../src/config"
 import { createRuntime } from "../src/index"
 
 const EXAMPLE = fileURLToPath(new URL("../examples/websearch.config.jsonc", import.meta.url))
@@ -160,6 +168,65 @@ describe("JSONC 注释剥离（状态机，非 naive regex）", () => {
   })
 })
 
+describe("JSONC 尾逗号容忍（stripTrailingCommas，紧跟 ]/} 的 , 被删）", () => {
+  it("数组尾逗号 → 解析成功、不回退", () => {
+    const home = tmpHome()
+    const p = put(
+      home,
+      "arr.jsonc",
+      '{ "providers": { "exa": { "enabled": true, "keys": ["EXA_API_KEY", "EXA_API_KEY_2", ], }, }, }',
+    )
+    const out = loadExternalConfig({ configFile: p }, { homeDir: home })
+    expect(out.warnings).toEqual([])
+    expect(out.options.providers?.exa?.keys).toEqual(["EXA_API_KEY", "EXA_API_KEY_2"])
+  })
+
+  it("对象尾逗号（多层 + 换行空白分隔）→ 解析成功", () => {
+    const home = tmpHome()
+    const p = put(
+      home,
+      "obj.jsonc",
+      '{\n  "routing": { "strategy": "priority", },\n  "cache": {\n    "ttlMs": 5,\n  },\n}',
+    )
+    const out = loadExternalConfig({ configFile: p }, { homeDir: home })
+    expect(out.warnings).toEqual([])
+    expect(out.options.routing).toEqual({ strategy: "priority" })
+    expect(out.options.cache).toEqual({ ttlMs: 5 })
+  })
+
+  it("嵌套多处尾逗号（对象/数组混合）→ 解析成功", () => {
+    const home = tmpHome()
+    const p = put(
+      home,
+      "multi.jsonc",
+      '{ "budget": { "unit": "requests", "limits": [ { "scope": "provider", "target": "exa", "limit": 10, }, ], }, "logging": { "level": "info", }, }',
+    )
+    const out = loadExternalConfig({ configFile: p }, { homeDir: home })
+    expect(out.warnings).toEqual([])
+    expect(out.options.budget?.limits).toEqual([{ scope: "provider", target: "exa", limit: 10 }])
+    expect(out.options.logging).toEqual({ level: "info" })
+  })
+
+  it("字符串字面量内的 `,]` 与 `,}` 不被误删", () => {
+    const src = '{ "note": ",] and ,}", "n": 1, }'
+    expect(JSON.parse(stripTrailingCommas(stripJsonComments(src)))).toEqual({ note: ",] and ,}", n: 1 })
+    const home = tmpHome()
+    const p = put(home, "str.jsonc", src)
+    const out = loadExternalConfig({ configFile: p }, { homeDir: home })
+    expect(out.warnings).toEqual([])
+    expect(out.options).toEqual({ note: ",] and ,}", n: 1 })
+  })
+
+  it("非尾逗号（中间逗号）不动；真语法错仍回退 inline + warning", () => {
+    expect(stripTrailingCommas('[1,,2]')).toBe("[1,,2]") // 空元素不是尾逗号 → 保留，JSON.parse 仍失败
+    const home = tmpHome()
+    const p = put(home, "gap.jsonc", '{ "cache": { "ttlMs": , } }')
+    const out = loadExternalConfig({ configFile: p }, { homeDir: home })
+    expect(out.warnings.some((w) => w.includes("解析失败"))).toBe(true)
+    expect(out.options).toEqual({})
+  })
+})
+
 describe("坏 JSON → 回退 inline + warning（不抛错）", () => {
   it("语法错误 → options=inline、warnings 含解析失败", () => {
     const home = tmpHome()
@@ -168,14 +235,6 @@ describe("坏 JSON → 回退 inline + warning（不抛错）", () => {
     expect(out.warnings.some((w) => w.includes("解析失败"))).toBe(true)
     expect(out.source).toBeUndefined()
     expect(out.options).toEqual({ logging: { level: "debug" } })
-  })
-
-  it("尾逗号（JSONC 方言未支持）→ 同样回退 inline + warning", () => {
-    const home = tmpHome()
-    const p = put(home, "trailing.jsonc", '{ "cache": { "ttlMs": 5, }, }')
-    const out = loadExternalConfig({ configFile: p }, { homeDir: home })
-    expect(out.warnings.some((w) => w.includes("解析失败"))).toBe(true)
-    expect(out.options).toEqual({})
   })
 
   it("顶层非对象 → 回退 inline + warning", () => {
@@ -211,13 +270,17 @@ describe("createRuntime 集成（本地文件 IO，零网络）", () => {
 
   it("默认路径自动加载 + 文件 warning 透传到 runtime.warnings", () => {
     const home = tmpHome()
-    put(home, DEFAULT_CONFIG_FILE, '{ "providers": { "searxng": { "enabled": true } }, "cache": { "ttlMs": 7, } }')
+    put(home, DEFAULT_CONFIG_FILE, '{ "providers": { "searxng": { "enabled": true } }, "cache": ')
     const rt = createRuntime({}, { env: {}, homeDir: home })
-    // 坏 JSON（尾逗号）→ 回退 inline，不抛错
+    // 真语法错（未闭合）→ 回退 inline，不抛错
     expect(rt.warnings.some((w) => w.includes("解析失败"))).toBe(true)
     expect(rt.config.providers.searxng.enabled).toBe(false)
 
-    put(home, DEFAULT_CONFIG_FILE, '{ "providers": { "searxng": { "enabled": true } }, "cache": { "ttlMs": 7 } }')
+    put(
+      home,
+      DEFAULT_CONFIG_FILE,
+      '{ "providers": { "searxng": { "enabled": true, }, }, "cache": { "ttlMs": 7, }, }',
+    ) // 尾逗号 → JSONC 容忍，解析成功
     const ok = createRuntime({}, { env: {}, homeDir: home })
     expect(ok.warnings).toEqual([])
     expect(ok.config.providers.searxng.enabled).toBe(true)

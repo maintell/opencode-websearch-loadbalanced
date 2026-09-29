@@ -5,6 +5,8 @@
  * - 错误脱敏（RouterError 原样上抛；裸 Error 经 redact）
  * - 插件定义形态（id / setup）
  */
+import os from "node:os"
+import path from "node:path"
 import { describe, expect, it } from "vitest"
 import plugin, { createExecute, createRuntime, toWebSearchResult } from "../src/index"
 import { RouterError } from "../src/router"
@@ -123,15 +125,18 @@ describe("createExecute（fake router 冒烟，零网络）", () => {
 })
 
 describe("createRuntime 装配冒烟（无 provider 启用 → 零网络）", () => {
+  // 隔离真实 ~/.config 外置配置（homeDir 指向不存在目录 → 默认路径探测静默 no-op）
+  const emptyHome = path.join(os.tmpdir(), "wslb-empty-home-does-not-exist")
+
   it("空 options → 无 error、router 可构造、route 全挂抛 RouterError（不出网络请求）", async () => {
-    const rt = createRuntime({}, { env: {} })
+    const rt = createRuntime({}, { env: {}, homeDir: emptyHome })
     expect(rt.errors).toEqual([])
     expect(rt.config.providers.exa.enabled).toBe(false)
     await expect(rt.router.route({ query: "q" })).rejects.toBeInstanceOf(RouterError)
   })
 
   it("启用 provider 但 env 缺失 → warning + provider 置灰，不抛错", () => {
-    const rt = createRuntime({ providers: { exa: { enabled: true, keys: ["EXA_API_KEY"] } } }, { env: {} })
+    const rt = createRuntime({ providers: { exa: { enabled: true, keys: ["EXA_API_KEY"] } } }, { env: {}, homeDir: emptyHome })
     expect(rt.errors).toEqual([])
     expect(rt.config.providers.exa.enabled).toBe(false)
     expect(rt.warnings.some((w) => w.includes("EXA_API_KEY"))).toBe(true)
