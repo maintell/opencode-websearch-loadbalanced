@@ -143,9 +143,21 @@ describe("createRuntime 装配冒烟（无 provider 启用 → 零网络）", ()
   })
 })
 
-describe("插件定义形态", () => {
-  it("默认导出 id=websearch-loadbalanced 且含 setup", () => {
+describe("插件定义形态（V1）", () => {
+  it("默认导出 id=websearch-loadbalanced 且含 server 函数", () => {
     expect(plugin.id).toBe("websearch-loadbalanced")
-    expect(typeof plugin.setup).toBe("function")
+    expect(typeof plugin.server).toBe("function")
+  })
+})
+
+describe("createWebSearchTool（V1 tool 形态）", () => {
+  it("execute 返回可读文本且含 url", async () => {
+    const { createWebSearchTool } = await import("../src/index")
+    const tool = createWebSearchTool({
+      run: async () => [{ url: "https://a.example/1", title: "T", content: "C", time: {} }],
+    })
+    const out = await tool.execute({ query: "q" })
+    expect(typeof out).toBe("string")
+    expect(out).toContain("https://a.example/1")
   })
 })
