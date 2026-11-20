@@ -74,10 +74,31 @@ Web search results for "<query>" (N):
 2. ...
 ```
 
+## MiniMax Code 入口（同一内核，第二个宿主）
+
+`src/mcode.ts` 把同一个 `searchweb` 工具交给 MiniMax Code 的本地 Plugin 运行时，
+内核（路由 / key 池 / 熔断 / 预算 / 缓存 / adapter）全在 `src/runtime.ts`，两个宿主共用、
+一字未改。差别只有宿主契约的两处：
+
+| | OpenCode V1（`src/index.ts`） | MiniMax Code（`src/mcode.ts`） |
+|---|---|---|
+| 参数声明 | zod raw shape（宿主用 zod 校验） | JSON Schema（MCP 自己发布并透传） |
+| 产物 | `dist/index.js`，ESM，内联 zod | `dist/mcode.cjs`，CJS，**零 zod** |
+| 配置默认位置 | `~/.config/opencode/websearch-loadbalanced.jsonc` | `$MCODE_CONFIG_DIR` → `~/.minimax` → OpenCode 配置目录 → 包根，取第一个存在的 |
+
+配置文件仍是同一份 JSONC（`keysInline` 明文密钥）。MiniMax 侧复制一份到
+`%USERPROFILE%\.minimax\` 后即以那份为准，两边互不影响。
+
+插件包不在这里手工组装：仓库只产出 `dist/mcode.cjs`，由
+`%USERPROFILE%\.minimax\plugin-build\build-websearch-tools.ps1` 复刻 manifest / MCP server /
+SKILL，跑包校验后装进 `%USERPROFILE%\.minimax\plugins\websearch-tools`。
+
 ## 架构
 
 ```
-src/index.ts            { id, server }：装配 + tool execute 入口（formatSearchResults → string）
+src/runtime.ts          装配 + execute + 文本化（宿主无关，两个入口共用）
+src/index.ts            OpenCode V1 入口：{ id, server }，tool.args 为 zod raw shape
+src/mcode.ts            MiniMax Code 入口：同一工具，tool.args 为 JSON Schema
 src/config.ts           options → ResolvedConfig（默认值 / ${ENV} 展开 / 校验 / key 脱敏）
 src/router.ts           候选过滤 → 策略排序 → 逐派发 → 错误分类（切 key / 切 provider / 放弃）
 src/key-pool.ts         每 provider 的 key 状态：round-robin、429 冷却、401/403 禁用
@@ -164,6 +185,7 @@ env 缺失 → 该 key/provider 标记不可用（warning + `enabled=false`）�
 | `typecheck` | `tsc --noEmit` | 类型检查 |
 | `lint` | `tsc --noEmit` | 占位（暂无 eslint 配置） |
 | `build` | `esbuild src/index.ts --bundle --platform=node --format=esm --outfile=dist/index.js` | 打包为自包含 ESM 单文件（bundled zod，`node:` 内置外部化） |
+| `build:mcode` | `esbuild src/mcode.ts --bundle --platform=node --format=cjs --outfile=dist/mcode.cjs` | MiniMax Code 入口：CJS、零 zod，产物体积约 91 KB |
 
 ```bash
 npm install
